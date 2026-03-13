@@ -57,7 +57,7 @@ python scripts/train.py --csv data/flows.csv --epochs 15
 6. 启动监控看板
 
 ```bash
-streamlit run dashboard/app.py
+python -m streamlit run dashboard/app.py
 ```
 
 7. 启动代理服务
