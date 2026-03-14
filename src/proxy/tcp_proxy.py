@@ -6,7 +6,7 @@ from typing import Tuple
 from src.config import MONITOR_LOG_PATH, PROXY_HOST, PROXY_PORT, SEQ_LEN
 from src.features.packet_sequence import PacketSequenceBuffer
 from src.model.inference import OnlineTrafficClassifier
-from src.utils.monitor_store import append_prediction
+from src.utils.monitor_store import append_prediction, reset_prediction_log
 
 
 classifier = OnlineTrafficClassifier()
@@ -110,6 +110,9 @@ def handle_client(client: socket.socket, client_addr) -> None:
 
 
 def run_proxy() -> None:
+    reset_prediction_log(MONITOR_LOG_PATH)
+    print(f"Prediction log reset: {MONITOR_LOG_PATH}")
+
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((PROXY_HOST, PROXY_PORT))

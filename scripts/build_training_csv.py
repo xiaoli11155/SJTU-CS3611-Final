@@ -1,5 +1,12 @@
 import argparse
+from glob import glob
 from pathlib import Path
+import sys
+
+# Allow running this file directly: `python scripts/build_training_csv.py ...`
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import pandas as pd
 
@@ -14,6 +21,47 @@ CLASS_MAP = {
 }
 
 
+def infer_source_group_name(spec: str) -> str:
+    """Infer a stable output folder name from file/dir/glob input."""
+    spec = spec.strip()
+    path = Path(spec)
+
+    if path.is_dir():
+        return path.name
+
+    if path.is_file():
+        return path.parent.name
+
+    if any(ch in spec for ch in "*?[]"):
+        first_wildcard = min(spec.find(ch) for ch in "*?[]" if ch in spec)
+        static_prefix = spec[:first_wildcard].rstrip("/\\")
+        if static_prefix:
+            prefix_path = Path(static_prefix)
+            if prefix_path.suffix:
+                return prefix_path.parent.name or "pcap_inputs"
+            return prefix_path.name
+
+    return "pcap_inputs"
+
+
+def resolve_pcap_paths(spec: str) -> list[Path]:
+    spec = spec.strip()
+    path = Path(spec)
+
+    if path.is_file():
+        return [path]
+
+    if path.is_dir():
+        out = sorted(path.rglob("*.pcap")) + sorted(path.rglob("*.pcapng"))
+        return out
+
+    # Support shell-like patterns on all platforms.
+    if any(ch in spec for ch in "*?[]"):
+        return [Path(p) for p in sorted(glob(spec))]
+
+    raise FileNotFoundError(f"PCAP path not found: {spec}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build merged training CSV from class-labeled PCAP files")
     parser.add_argument(
@@ -22,6 +70,7 @@ def main() -> None:
         default=[],
         help=(
             "Class and pcap path pair, format: class_name=path/to/file.pcap. "
+            "Path can be a single file, a folder, or a wildcard pattern. "
             "Repeat this option for 3-4 classes."
         ),
     )
@@ -43,11 +92,28 @@ def main() -> None:
         cls, pcap = pair.split("=", 1)
         cls_norm = cls.strip().lower()
         label = CLASS_MAP.get(cls_norm, cls.strip())
-        pcap_path = Path(pcap.strip())
+        source_group = infer_source_group_name(pcap)
+        group_work_dir = args.work_dir / source_group
+        pcap_paths = resolve_pcap_paths(pcap)
+        if not pcap_paths:
+            print(f"Skip class '{cls}': no pcap found from '{pcap}'")
+            continue
 
-        out_csv = args.work_dir / f"{cls_norm}.csv"
-        pcap_to_csv(pcap_path, out_csv, label)
+        class_parts = []
+        for pcap_path in pcap_paths:
+            # Keep each pcap's features in its own directory for easier incremental data prep.
+            pcap_dir = group_work_dir / pcap_path.stem
+            part_csv = pcap_dir / f"{cls_norm}.csv"
+            pcap_to_csv(pcap_path, part_csv, label)
+            class_parts.append(part_csv)
+
+        out_csv = group_work_dir / f"{cls_norm}.csv"
+        pd.concat([pd.read_csv(f) for f in class_parts], ignore_index=True).to_csv(out_csv, index=False)
+        print(f"Merged class '{cls_norm}' from {len(class_parts)} file(s) -> {out_csv}")
         csv_files.append(out_csv)
+
+    if not csv_files:
+        raise ValueError("No valid class CSV files were generated.")
 
     merged = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
     args.out.parent.mkdir(parents=True, exist_ok=True)

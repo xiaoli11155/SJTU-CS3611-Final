@@ -28,6 +28,8 @@ Zip files are extracted to data/extracted.
 
 Example:
 
-python scripts/build_training_csv.py --class-pcap video=data/extracted/video.pcap --class-pcap chat=data/extracted/chat.pcap --class-pcap file=data/extracted/file.pcap --out data/flows.csv
+```bash
+python scripts/build_training_csv.py --class-pcap "chat=data/raw/NonVPN-PCAPs-01/*chat*.pcap*" --class-pcap "video=data/raw/NonVPN-PCAPs-01/*video*.pcap*" --class-pcap "file=data/raw/NonVPN-PCAPs-01/*email*.pcap*" --class-pcap "web=data/raw/NonVPN-PCAPs-01/*audio*.pcap*" --out data/flows.csv
+```
 
 The output data/flows.csv is directly used by training.

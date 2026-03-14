@@ -1,5 +1,7 @@
 import argparse
 import json
+from pathlib import Path
+import sys
 
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -10,6 +12,11 @@ from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, TensorDataset
+
+# Allow running this file directly: `python scripts/train.py ...`
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import LABEL_PATH, MODEL_PATH, NUM_CLASSES, SEQ_LEN
 from src.model.cnn1d import CNN1DClassifier

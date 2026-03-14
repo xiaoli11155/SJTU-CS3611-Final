@@ -3,6 +3,12 @@ from datetime import datetime
 from pathlib import Path
 
 
+def reset_prediction_log(log_path: Path) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Overwrite existing file so each proxy run starts with a fresh log.
+    log_path.write_text("", encoding="utf-8")
+
+
 def append_prediction(log_path: Path, flow_id: str, label: str) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
