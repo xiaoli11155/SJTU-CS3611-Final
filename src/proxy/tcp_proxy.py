@@ -35,10 +35,17 @@ def relay_bidirectional(client: socket.socket, remote: socket.socket, flow_id: s
     feature_buf = PacketSequenceBuffer(seq_len=SEQ_LEN)
     predicted = False
 
+    # Keep long-lived tunnels (e.g. HTTPS CONNECT) from failing on idle read timeout.
+    client.settimeout(None)
+    remote.settimeout(None)
+
     def forward(src: socket.socket, dst: socket.socket) -> None:
         nonlocal predicted
         while True:
-            data = src.recv(4096)
+            try:
+                data = src.recv(4096)
+            except (socket.timeout, TimeoutError, OSError):
+                break
             if not data:
                 break
 
@@ -49,7 +56,15 @@ def relay_bidirectional(client: socket.socket, remote: socket.socket, flow_id: s
                 append_prediction(MONITOR_LOG_PATH, flow_id, label)
                 predicted = True
 
-            dst.sendall(data)
+            try:
+                dst.sendall(data)
+            except OSError:
+                break
+
+        try:
+            dst.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
 
     t1 = threading.Thread(target=forward, args=(client, remote), daemon=True)
     t2 = threading.Thread(target=forward, args=(remote, client), daemon=True)

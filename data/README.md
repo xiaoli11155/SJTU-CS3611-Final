@@ -17,8 +17,9 @@ Notes:
 ## Step 1: Download Raw Files
 
 Example:
-
+```bash
 python scripts/download_dataset.py --url "DIRECT_FILE_URL_1" --url "DIRECT_FILE_URL_2"
+```
 
 Downloaded files are saved to data/raw.
 Zip files are extracted to data/extracted.

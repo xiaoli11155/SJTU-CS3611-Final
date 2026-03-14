@@ -1,6 +1,6 @@
 import json
 from collections import Counter
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -13,11 +13,19 @@ st.set_page_config(page_title="Traffic Monitor", layout="wide")
 st.title("Encrypted Traffic Real-time Monitor")
 
 
+def parse_prediction_time(raw: str) -> datetime:
+    # Old logs are naive UTC strings; new logs may include timezone.
+    ts = datetime.fromisoformat(raw)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts
+
+
 def load_recent_predictions(path: Path, seconds: int = 300):
     if not path.exists():
         return []
 
-    cutoff = datetime.utcnow() - timedelta(seconds=seconds)
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=seconds)
     rows = []
     with path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -25,8 +33,9 @@ def load_recent_predictions(path: Path, seconds: int = 300):
             if not line:
                 continue
             obj = json.loads(line)
-            ts = datetime.fromisoformat(obj["time"])
+            ts = parse_prediction_time(obj["time"])
             if ts >= cutoff:
+                obj["time_local"] = ts.astimezone().strftime("%Y-%m-%d %H:%M:%S")
                 rows.append(obj)
     return rows
 
@@ -48,6 +57,9 @@ else:
 
     with col2:
         st.subheader("Latest Records")
-        st.dataframe(pd.DataFrame(rows).tail(20), use_container_width=True)
+        df = pd.DataFrame(rows)
+        show_cols = ["time_local", "flow_id", "label", "time"]
+        show_cols = [c for c in show_cols if c in df.columns]
+        st.dataframe(df.tail(20)[show_cols], use_container_width=True)
 
 st.caption(f"Prediction log: {MONITOR_LOG_PATH}")
