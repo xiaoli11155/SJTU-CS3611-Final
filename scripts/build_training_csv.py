@@ -11,6 +11,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import pandas as pd
 
 from src.data.pcap_preprocess import pcap_to_csv
+from src.config import SEQ_LEN
 
 
 CLASS_MAP = {
@@ -76,6 +77,17 @@ def main() -> None:
     )
     parser.add_argument("--work-dir", type=Path, default=Path("data/processed"))
     parser.add_argument("--out", type=Path, default=Path("data/flows.csv"))
+    parser.add_argument(
+        "--seq-len",
+        action="append",
+        type=int,
+        default=[],
+        help=(
+            "Sequence length for generated features. Repeat for multiple outputs, "
+            "e.g., --seq-len 32 --seq-len 64 --seq-len 100. "
+            "If omitted, defaults to src.config.SEQ_LEN."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.class_pcap:
@@ -83,43 +95,56 @@ def main() -> None:
         print("Example: --class-pcap video=data/extracted/video.pcap --class-pcap chat=data/extracted/chat.pcap")
         return
 
+    seq_lens = sorted(set(args.seq_len)) if args.seq_len else [SEQ_LEN]
+    for seq_len in seq_lens:
+        if seq_len <= 0:
+            raise ValueError(f"Invalid --seq-len: {seq_len}. It must be positive.")
+
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    csv_files = []
+    out_base = args.out
+    out_stem = out_base.stem
+    out_suffix = out_base.suffix or ".csv"
 
-    for pair in args.class_pcap:
-        if "=" not in pair:
-            raise ValueError(f"Invalid --class-pcap format: {pair}")
-        cls, pcap = pair.split("=", 1)
-        cls_norm = cls.strip().lower()
-        label = CLASS_MAP.get(cls_norm, cls.strip())
-        source_group = infer_source_group_name(pcap)
-        group_work_dir = args.work_dir / source_group
-        pcap_paths = resolve_pcap_paths(pcap)
-        if not pcap_paths:
-            print(f"Skip class '{cls}': no pcap found from '{pcap}'")
-            continue
+    for seq_len in seq_lens:
+        csv_files = []
+        seq_work_dir = args.work_dir / f"seq{seq_len}"
+        seq_work_dir.mkdir(parents=True, exist_ok=True)
 
-        class_parts = []
-        for pcap_path in pcap_paths:
-            # Keep each pcap's features in its own directory for easier incremental data prep.
-            pcap_dir = group_work_dir / pcap_path.stem
-            part_csv = pcap_dir / f"{cls_norm}.csv"
-            pcap_to_csv(pcap_path, part_csv, label)
-            class_parts.append(part_csv)
+        for pair in args.class_pcap:
+            if "=" not in pair:
+                raise ValueError(f"Invalid --class-pcap format: {pair}")
+            cls, pcap = pair.split("=", 1)
+            cls_norm = cls.strip().lower()
+            label = CLASS_MAP.get(cls_norm, cls.strip())
+            source_group = infer_source_group_name(pcap)
+            group_work_dir = seq_work_dir / source_group
+            pcap_paths = resolve_pcap_paths(pcap)
+            if not pcap_paths:
+                print(f"Skip class '{cls}': no pcap found from '{pcap}'")
+                continue
 
-        out_csv = group_work_dir / f"{cls_norm}.csv"
-        pd.concat([pd.read_csv(f) for f in class_parts], ignore_index=True).to_csv(out_csv, index=False)
-        print(f"Merged class '{cls_norm}' from {len(class_parts)} file(s) -> {out_csv}")
-        csv_files.append(out_csv)
+            class_parts = []
+            for pcap_path in pcap_paths:
+                # Keep each pcap's features in its own directory for easier incremental data prep.
+                pcap_dir = group_work_dir / pcap_path.stem
+                part_csv = pcap_dir / f"{cls_norm}.csv"
+                pcap_to_csv(pcap_path, part_csv, label, seq_len=seq_len)
+                class_parts.append(part_csv)
 
-    if not csv_files:
-        raise ValueError("No valid class CSV files were generated.")
+            out_csv = group_work_dir / f"{cls_norm}.csv"
+            pd.concat([pd.read_csv(f) for f in class_parts], ignore_index=True).to_csv(out_csv, index=False)
+            print(f"[SEQ_LEN={seq_len}] Merged class '{cls_norm}' from {len(class_parts)} file(s) -> {out_csv}")
+            csv_files.append(out_csv)
 
-    merged = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    merged.to_csv(args.out, index=False)
-    print(f"Merged {len(csv_files)} class files into: {args.out}")
-    print(f"Total flow samples: {len(merged)}")
+        if not csv_files:
+            raise ValueError(f"[SEQ_LEN={seq_len}] No valid class CSV files were generated.")
+
+        merged = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
+        out_path = out_base if len(seq_lens) == 1 else out_base.with_name(f"{out_stem}_seq{seq_len}{out_suffix}")
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        merged.to_csv(out_path, index=False)
+        print(f"[SEQ_LEN={seq_len}] Merged {len(csv_files)} class files into: {out_path}")
+        print(f"[SEQ_LEN={seq_len}] Total flow samples: {len(merged)}")
 
 
 if __name__ == "__main__":

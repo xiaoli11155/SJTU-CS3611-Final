@@ -13,7 +13,13 @@ def flow_key(pkt):
     return (ip.src, ip.dst, tcp.sport, tcp.dport, "TCP")
 
 
-def pcap_to_csv(pcap_path: Path, output_csv: Path, label: str) -> None:
+def pcap_to_csv(
+    pcap_path: Path,
+    output_csv: Path,
+    label: str,
+    seq_len: int = SEQ_LEN,
+    max_packet_len: int = MAX_PACKET_LEN,
+) -> None:
     packets = rdpcap(str(pcap_path))
     flows = {}
 
@@ -24,10 +30,10 @@ def pcap_to_csv(pcap_path: Path, output_csv: Path, label: str) -> None:
 
     rows = []
     for _, lengths in flows.items():
-        vec = [0] * SEQ_LEN
-        for i, v in enumerate(lengths[:SEQ_LEN]):
-            vec[i] = min(v, MAX_PACKET_LEN) / float(MAX_PACKET_LEN)
-        row = {f"f{i}": vec[i] for i in range(SEQ_LEN)}
+        vec = [0] * seq_len
+        for i, v in enumerate(lengths[:seq_len]):
+            vec[i] = min(v, max_packet_len) / float(max_packet_len)
+        row = {f"f{i}": vec[i] for i in range(seq_len)}
         row["label"] = label
         rows.append(row)
 
@@ -41,9 +47,17 @@ def main() -> None:
     parser.add_argument("--pcap", required=True, type=Path)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--label", required=True, type=str)
+    parser.add_argument("--seq-len", default=SEQ_LEN, type=int)
+    parser.add_argument("--max-packet-len", default=MAX_PACKET_LEN, type=int)
     args = parser.parse_args()
 
-    pcap_to_csv(args.pcap, args.out, args.label)
+    pcap_to_csv(
+        args.pcap,
+        args.out,
+        args.label,
+        seq_len=args.seq_len,
+        max_packet_len=args.max_packet_len,
+    )
 
 
 if __name__ == "__main__":
