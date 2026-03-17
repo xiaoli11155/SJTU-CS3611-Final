@@ -23,6 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import LABEL_PATH, MODEL_PATH, NUM_CLASSES, SEQ_LEN
 from src.model.cnn1d import CNN1DClassifier
+from src.model.lstm import LSTMClassifier
 
 
 def set_seed(seed: int = 42) -> None:
@@ -46,9 +47,15 @@ def focal_cross_entropy(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", required=True, type=str)
+    parser.add_argument(
+        "--model",
+        default="cnn1d",
+        choices=["cnn1d", "lstm"],
+        help="Model type to train.",
+    )
     parser.add_argument("--epochs", default=100, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
-    parser.add_argument("--lr", default=5e-3, type=float)
+    parser.add_argument("--lr", default=1e-3, type=float)
     parser.add_argument("--weight-decay", default=1e-4, type=float)
     parser.add_argument("--label-smoothing", default=0.0, type=float)
     parser.add_argument("--seed", default=42, type=int)
@@ -76,6 +83,12 @@ def main() -> None:
         type=int,
         help="Override sequence length. If omitted, inferred from CSV columns f0..fN.",
     )
+    parser.add_argument(
+        "--lstm-prefix-len",
+        default=0,
+        type=int,
+        help="For LSTM only: use only the first N feature positions (0 means full length).",
+    )
     args = parser.parse_args()
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -100,6 +113,14 @@ def main() -> None:
     print(f"Using SEQ_LEN={seq_len} from {'--seq-len' if args.seq_len is not None else 'CSV columns'}.")
 
     x = torch.tensor(df[feature_cols].values, dtype=torch.float32)
+    if args.model == "lstm" and args.lstm_prefix_len > 0:
+        if args.lstm_prefix_len > x.size(1):
+            raise ValueError(
+                f"--lstm-prefix-len={args.lstm_prefix_len} exceeds feature length {x.size(1)}."
+            )
+        x = x[:, : args.lstm_prefix_len]
+        print(f"LSTM prefix mode enabled: using first {args.lstm_prefix_len} positions.")
+    lengths = (x > 0).sum(dim=1).clamp_min(1).to(torch.long)
     y_raw = df["label"].astype(str).values
 
     encoder = LabelEncoder()
@@ -115,8 +136,8 @@ def main() -> None:
             "Training will use CSV classes."
         )
 
-    x_train, x_val, y_train, y_val = train_test_split(
-        x, y, test_size=0.2, random_state=42, stratify=y
+    x_train, x_val, y_train, y_val, len_train, len_val = train_test_split(
+        x, y, lengths, test_size=0.2, random_state=42, stratify=y
     )
 
     class_counts = torch.bincount(y_train, minlength=num_classes).float()
@@ -143,13 +164,24 @@ def main() -> None:
     )
 
     train_loader = DataLoader(
-        TensorDataset(x_train, y_train),
+        TensorDataset(x_train, y_train, len_train),
         batch_size=args.batch_size,
         sampler=sampler,
     )
-    val_loader = DataLoader(TensorDataset(x_val, y_val), batch_size=args.batch_size, shuffle=False)
+    val_loader = DataLoader(TensorDataset(x_val, y_val, len_val), batch_size=args.batch_size, shuffle=False)
 
-    model = CNN1DClassifier(seq_len=seq_len, num_classes=num_classes).to(device)
+    if args.model == "cnn1d":
+        model = CNN1DClassifier(seq_len=seq_len, num_classes=num_classes).to(device)
+    else:
+        model = LSTMClassifier(
+            input_size=1,
+            hidden_size=128,
+            num_layers=2,
+            num_classes=num_classes,
+            dropout=0.2,
+        ).to(device)
+    print(f"Using model: {args.model}")
+
     class_weights_device = class_weights.to(device)
     criterion = nn.CrossEntropyLoss(
         weight=class_weights_device,
@@ -168,13 +200,17 @@ def main() -> None:
     for epoch in range(args.epochs):
         model.train()
         total_loss = 0.0
-        for bx, by in train_loader:
+        for bx, by, blen in train_loader:
             bx = bx.to(device)
             by = by.to(device)
+            blen = blen.to(device)
 
             bx = bx + 0.01 * torch.randn_like(bx)
-            bx = bx.clamp(0.0, 1.0).unsqueeze(1)
-            logits = model(bx)
+            bx = bx.clamp(0.0, 1.0)
+            if args.model == "cnn1d":
+                logits = model(bx.unsqueeze(1))
+            else:
+                logits = model(bx.unsqueeze(-1), blen)
             if args.focal_gamma > 0:
                 loss = focal_cross_entropy(
                     logits=logits,
@@ -196,10 +232,14 @@ def main() -> None:
         all_pred = []
         all_true = []
         with torch.no_grad():
-            for bx, by in val_loader:
+            for bx, by, blen in val_loader:
                 bx = bx.to(device)
                 by = by.to(device)
-                logits = model(bx.unsqueeze(1))
+                blen = blen.to(device)
+                if args.model == "cnn1d":
+                    logits = model(bx.unsqueeze(1))
+                else:
+                    logits = model(bx.unsqueeze(-1), blen)
                 pred = torch.argmax(logits, dim=1)
                 all_pred.extend(pred.cpu().tolist())
                 all_true.extend(by.cpu().tolist())
@@ -232,10 +272,14 @@ def main() -> None:
     best_pred = []
     best_true = []
     with torch.no_grad():
-        for bx, by in val_loader:
+        for bx, by, blen in val_loader:
             bx = bx.to(device)
             by = by.to(device)
-            logits = model(bx.unsqueeze(1))
+            blen = blen.to(device)
+            if args.model == "cnn1d":
+                logits = model(bx.unsqueeze(1))
+            else:
+                logits = model(bx.unsqueeze(-1), blen)
             pred = torch.argmax(logits, dim=1)
             best_pred.extend(pred.cpu().tolist())
             best_true.extend(by.cpu().tolist())
