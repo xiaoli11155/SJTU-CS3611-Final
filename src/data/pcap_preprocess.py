@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 from scapy.all import IP, TCP, rdpcap
@@ -19,14 +20,19 @@ def pcap_to_csv(
     label: str,
     seq_len: int = SEQ_LEN,
     max_packet_len: int = MAX_PACKET_LEN,
+    progress_cb: Callable[[int], None] | None = None,
 ) -> None:
     packets = rdpcap(str(pcap_path))
     flows = {}
 
-    for pkt in packets:
+    for idx, pkt in enumerate(packets, start=1):
         if IP in pkt and TCP in pkt:
             key = flow_key(pkt)
             flows.setdefault(key, []).append(len(pkt))
+        if progress_cb is not None and idx % 20000 == 0:
+            progress_cb(idx)
+    if progress_cb is not None:
+        progress_cb(len(packets))
 
     rows = []
     for _, lengths in flows.items():

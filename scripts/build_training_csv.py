@@ -76,7 +76,7 @@ def main() -> None:
         ),
     )
     parser.add_argument("--work-dir", type=Path, default=Path("data/processed"))
-    parser.add_argument("--out", type=Path, default=Path("data/flows.csv"))
+    parser.add_argument("--out", type=Path, default=Path("data/processed/training/flows.csv"))
     parser.add_argument(
         "--seq-len",
         action="append",
