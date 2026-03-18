@@ -17,7 +17,12 @@ from src.config import SEQ_LEN
 CLASS_MAP = {
     "video": "Video",
     "chat": "Chat",
+    "email": "Email",
+    "audio": "Audio",
     "file": "FileTransfer",
+    "filetransfer": "FileTransfer",
+    "file_transform": "FileTransfer",
+    "filetransform": "FileTransfer",
     "web": "Web",
 }
 

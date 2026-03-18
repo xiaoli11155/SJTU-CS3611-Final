@@ -1,6 +1,7 @@
 [
+  "Audio",
   "Chat",
+  "Email",
   "FileTransfer",
-  "Video",
-  "Web"
+  "Video"
 ]

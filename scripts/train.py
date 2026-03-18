@@ -1,6 +1,7 @@
 import argparse
 import json
 import random
+import signal
 from pathlib import Path
 import sys
 
@@ -15,6 +16,10 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
+try:
+    from tqdm import tqdm
+except Exception:
+    tqdm = None
 
 # Allow running this file directly: `python scripts/train.py ...`
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +29,15 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.config import LABEL_PATH, MODEL_PATH, NUM_CLASSES, SEQ_LEN
 from src.model.cnn1d import CNN1DClassifier
 from src.model.lstm import LSTMClassifier
+
+INTERRUPTED = False
+
+
+def _handle_sigint(signum, frame) -> None:
+    del signum, frame
+    global INTERRUPTED
+    INTERRUPTED = True
+    print("\n[INTERRUPT] Ctrl+C received. Stopping training now...")
 
 
 def set_seed(seed: int = 42) -> None:
@@ -45,6 +59,9 @@ def focal_cross_entropy(
 
 
 def main() -> None:
+    global INTERRUPTED
+    signal.signal(signal.SIGINT, _handle_sigint)
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--csv", required=True, type=str)
     parser.add_argument(
@@ -55,7 +72,7 @@ def main() -> None:
     )
     parser.add_argument("--epochs", default=100, type=int)
     parser.add_argument("--batch-size", default=64, type=int)
-    parser.add_argument("--lr", default=1e-3, type=float)
+    parser.add_argument("--lr", default=5e-5, type=float)
     parser.add_argument("--weight-decay", default=1e-4, type=float)
     parser.add_argument("--label-smoothing", default=0.0, type=float)
     parser.add_argument("--seed", default=42, type=int)
@@ -89,11 +106,34 @@ def main() -> None:
         type=int,
         help="For LSTM only: use only the first N feature positions (0 means full length).",
     )
+    parser.add_argument(
+        "--max-per-class",
+        default=0,
+        type=int,
+        help="Cap training samples per class before split (0 means no cap).",
+    )
     args = parser.parse_args()
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     df = pd.read_csv(args.csv)
+    if args.max_per_class < 0:
+        raise ValueError("--max-per-class must be >= 0.")
+    if args.max_per_class > 0:
+        before = df["label"].astype(str).value_counts().sort_index()
+        df = (
+            df.groupby("label", group_keys=False)
+            .apply(lambda g: g.sample(n=min(len(g), args.max_per_class), random_state=args.seed))
+            .reset_index(drop=True)
+        )
+        after = df["label"].astype(str).value_counts().sort_index()
+        print(f"Applied class cap: max_per_class={args.max_per_class}")
+        print("Class counts before cap:")
+        for name, count in before.items():
+            print(f"  {name}: {int(count)}")
+        print("Class counts after cap:")
+        for name, count in after.items():
+            print(f"  {name}: {int(count)}")
     if args.seq_len is not None:
         if args.seq_len <= 0:
             raise ValueError("--seq-len must be positive.")
@@ -197,68 +237,103 @@ def main() -> None:
     best_acc = 0.0
     best_macro_f1 = 0.0
 
-    for epoch in range(args.epochs):
-        model.train()
-        total_loss = 0.0
-        for bx, by, blen in train_loader:
-            bx = bx.to(device)
-            by = by.to(device)
-            blen = blen.to(device)
-
-            bx = bx + 0.01 * torch.randn_like(bx)
-            bx = bx.clamp(0.0, 1.0)
-            if args.model == "cnn1d":
-                logits = model(bx.unsqueeze(1))
-            else:
-                logits = model(bx.unsqueeze(-1), blen)
-            if args.focal_gamma > 0:
-                loss = focal_cross_entropy(
-                    logits=logits,
-                    targets=by,
-                    class_weight=class_weights_device,
-                    gamma=args.focal_gamma,
+    try:
+        for epoch in range(args.epochs):
+            if INTERRUPTED:
+                break
+            model.train()
+            total_loss = 0.0
+            if tqdm is not None:
+                batch_iter = tqdm(
+                    train_loader,
+                    total=len(train_loader),
+                    desc=f"Epoch {epoch + 1}/{args.epochs}",
+                    unit="batch",
+                    leave=False,
                 )
             else:
-                loss = criterion(logits, by)
+                batch_iter = train_loader
 
-            optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            total_loss += float(loss.item())
-        scheduler.step()
-
-        model.eval()
-        all_pred = []
-        all_true = []
-        with torch.no_grad():
-            for bx, by, blen in val_loader:
+            for bx, by, blen in batch_iter:
+                if INTERRUPTED:
+                    break
                 bx = bx.to(device)
                 by = by.to(device)
                 blen = blen.to(device)
+
+                bx = bx + 0.01 * torch.randn_like(bx)
+                bx = bx.clamp(0.0, 1.0)
                 if args.model == "cnn1d":
                     logits = model(bx.unsqueeze(1))
                 else:
                     logits = model(bx.unsqueeze(-1), blen)
-                pred = torch.argmax(logits, dim=1)
-                all_pred.extend(pred.cpu().tolist())
-                all_true.extend(by.cpu().tolist())
+                if args.focal_gamma > 0:
+                    loss = focal_cross_entropy(
+                        logits=logits,
+                        targets=by,
+                        class_weight=class_weights_device,
+                        gamma=args.focal_gamma,
+                    )
+                else:
+                    loss = criterion(logits, by)
 
-        avg_loss = total_loss / max(len(train_loader), 1)
-        acc = accuracy_score(all_true, all_pred)
-        macro_f1 = f1_score(all_true, all_pred, average="macro", zero_division=0)
-        if macro_f1 > best_macro_f1:
-            best_macro_f1 = macro_f1
-            best_acc = acc
-            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
-        train_losses.append(avg_loss)
-        val_accs.append(acc)
-        val_macro_f1s.append(macro_f1)
-        current_lr = optimizer.param_groups[0]["lr"]
-        print(
-            f"Epoch {epoch + 1}/{args.epochs} - loss: {avg_loss:.4f} - "
-            f"val_acc: {acc:.4f} - val_macro_f1: {macro_f1:.4f} - lr: {current_lr:.6f}"
-        )
+                optimizer.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                total_loss += float(loss.item())
+                if tqdm is not None:
+                    batch_iter.set_postfix(loss=f"{float(loss.item()):.4f}")
+            if tqdm is not None:
+                batch_iter.close()
+            if INTERRUPTED:
+                break
+            scheduler.step()
+
+            model.eval()
+            all_pred = []
+            all_true = []
+            with torch.no_grad():
+                for bx, by, blen in val_loader:
+                    bx = bx.to(device)
+                    by = by.to(device)
+                    blen = blen.to(device)
+                    if args.model == "cnn1d":
+                        logits = model(bx.unsqueeze(1))
+                    else:
+                        logits = model(bx.unsqueeze(-1), blen)
+                    pred = torch.argmax(logits, dim=1)
+                    all_pred.extend(pred.cpu().tolist())
+                    all_true.extend(by.cpu().tolist())
+
+            avg_loss = total_loss / max(len(train_loader), 1)
+            acc = accuracy_score(all_true, all_pred)
+            macro_f1 = f1_score(all_true, all_pred, average="macro", zero_division=0)
+            if macro_f1 > best_macro_f1:
+                best_macro_f1 = macro_f1
+                best_acc = acc
+                best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+            train_losses.append(avg_loss)
+            val_accs.append(acc)
+            val_macro_f1s.append(macro_f1)
+            current_lr = optimizer.param_groups[0]["lr"]
+            print(
+                f"Epoch {epoch + 1}/{args.epochs} - loss: {avg_loss:.4f} - "
+                f"val_acc: {acc:.4f} - val_macro_f1: {macro_f1:.4f} - lr: {current_lr:.6f}"
+            )
+    except KeyboardInterrupt:
+        INTERRUPTED = True
+        print("\n[INTERRUPT] KeyboardInterrupt captured. Stopping training now...")
+
+    if INTERRUPTED:
+        print("[INTERRUPT] Training interrupted. Saving best checkpoint and exiting.")
+        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if best_state is not None:
+            torch.save(best_state, MODEL_PATH)
+            with LABEL_PATH.open("w", encoding="utf-8") as f:
+                json.dump(encoder.classes_.tolist(), f, ensure_ascii=True, indent=2)
+            print(f"[INTERRUPT] Saved best checkpoint to: {MODEL_PATH}")
+        return
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     if best_state is None:
