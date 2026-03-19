@@ -1,0 +1,16 @@
+{
+  "model_index_to_original_id": {
+    "0": 0,
+    "1": 1,
+    "2": 2,
+    "3": 3,
+    "4": 4
+  },
+  "original_id_to_name": {
+    "0": "chat",
+    "1": "email",
+    "2": "file_transfer",
+    "3": "streaming",
+    "4": "voip"
+  }
+}

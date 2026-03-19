@@ -1,0 +1,6 @@
+,chat,email,file_transfer,streaming,voip
+chat,4050,531,56,6,2
+email,3,772,1,1,0
+file_transfer,33,212,4220,29,3
+streaming,6,68,83,7891,4
+voip,91,1049,201,3376,15607
