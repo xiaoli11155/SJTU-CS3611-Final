@@ -2,9 +2,10 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SEQ_LEN = 100
+SEQ_LEN = 32
 MAX_PACKET_LEN = 1500
-NUM_CLASSES = 4
+NUM_CLASSES = 5
+SIGNED_LENGTHS = True
 
 MODEL_DIR = BASE_DIR / "artifacts"
 MODEL_PATH = MODEL_DIR / "cnn1d.pth"

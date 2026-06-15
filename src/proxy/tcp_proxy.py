@@ -3,7 +3,7 @@ import threading
 import time
 from typing import Tuple
 
-from src.config import MONITOR_LOG_PATH, PROXY_HOST, PROXY_PORT, SEQ_LEN
+from src.config import MONITOR_LOG_PATH, PROXY_HOST, PROXY_PORT, SEQ_LEN, SIGNED_LENGTHS
 from src.features.packet_sequence import PacketSequenceBuffer
 from src.model.inference import OnlineTrafficClassifier
 from src.utils.monitor_store import append_prediction, reset_prediction_log
@@ -32,14 +32,14 @@ def parse_target_from_http(headers: str) -> Tuple[str, int]:
 
 
 def relay_bidirectional(client: socket.socket, remote: socket.socket, flow_id: str) -> None:
-    feature_buf = PacketSequenceBuffer(seq_len=SEQ_LEN)
+    feature_buf = PacketSequenceBuffer(seq_len=SEQ_LEN, signed_lengths=SIGNED_LENGTHS)
     predicted = False
 
     # Keep long-lived tunnels (e.g. HTTPS CONNECT) from failing on idle read timeout.
     client.settimeout(None)
     remote.settimeout(None)
 
-    def forward(src: socket.socket, dst: socket.socket) -> None:
+    def forward(src: socket.socket, dst: socket.socket, direction: int) -> None:
         nonlocal predicted
         while True:
             try:
@@ -49,7 +49,7 @@ def relay_bidirectional(client: socket.socket, remote: socket.socket, flow_id: s
             if not data:
                 break
 
-            feature_buf.add_packet_len(len(data))
+            feature_buf.add_packet_len(len(data), direction=direction)
             if feature_buf.is_ready() and not predicted:
                 label = classifier.predict(feature_buf.to_normalized_vector())
                 print(f"[{flow_id}] Stream Type: {label}")
@@ -66,8 +66,8 @@ def relay_bidirectional(client: socket.socket, remote: socket.socket, flow_id: s
         except OSError:
             pass
 
-    t1 = threading.Thread(target=forward, args=(client, remote), daemon=True)
-    t2 = threading.Thread(target=forward, args=(remote, client), daemon=True)
+    t1 = threading.Thread(target=forward, args=(client, remote, 1), daemon=True)
+    t2 = threading.Thread(target=forward, args=(remote, client, -1), daemon=True)
     t1.start()
     t2.start()
     t1.join()

@@ -1,7 +1,7 @@
 [
-  "Audio",
-  "Chat",
+  "Communication",
   "Email",
   "FileTransfer",
-  "Video"
+  "StreamingMedia",
+  "VideoCall"
 ]
