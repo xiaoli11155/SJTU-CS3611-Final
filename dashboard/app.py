@@ -1,4 +1,5 @@
 import json
+import os
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -6,7 +7,10 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from src.config import MONITOR_LOG_PATH
+from src.config import get_monitor_log_path
+
+EXPERIMENT_TAG = os.environ.get("EXPERIMENT_TAG")
+MONITOR_LOG_PATH = get_monitor_log_path(EXPERIMENT_TAG)
 
 
 st.set_page_config(page_title="Traffic Monitor", layout="wide")

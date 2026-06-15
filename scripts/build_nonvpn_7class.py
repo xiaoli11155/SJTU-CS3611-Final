@@ -13,7 +13,7 @@ from src.config import SEQ_LEN
 from src.data.pcap_preprocess import pcap_to_csv
 
 
-CLASS_RULES_7 = [
+CLASS_RULES_TCP7 = [
     (
         "TextChat",
         [
@@ -70,7 +70,7 @@ CLASS_RULES_7 = [
 ]
 
 
-CLASS_RULES_8 = [
+CLASS_RULES_TCP8 = [
     (
         "TextChat",
         [
@@ -184,17 +184,124 @@ CLASS_RULES_TCP5 = [
 ]
 
 
+CLASS_RULES_TCP4 = [
+    (
+        "Communication",
+        [
+            "aim",
+            "icq",
+            "gmailchat",
+            "facebookchat",
+            "facebook_chat",
+            "hangouts_chat",
+            "hangout_chat",
+            "skype_chat",
+            "facebook_audio",
+            "hangouts_audio",
+            "skype_audio",
+            "voipbuster",
+        ],
+    ),
+    ("Email", ["email"]),
+    (
+        "StreamingMedia",
+        [
+            "spotify",
+            "youtube",
+            "netflix",
+            "vimeo",
+            "facebook_video",
+            "hangouts_video",
+            "skype_video",
+        ],
+    ),
+    (
+        "FileTransfer",
+        [
+            "ftps_down",
+            "ftps_up",
+            "scpdown",
+            "scp_down",
+            "scpup",
+            "scp_up",
+            "scp",
+            "sftpdown",
+            "sftp_down",
+            "sftpup",
+            "sftp_up",
+            "sftp",
+            "skype_file",
+        ],
+    ),
+]
+
+CLASS_RULES_TCP3 = [
+    (
+        "Communication",
+        [
+            "aim",
+            "icq",
+            "gmailchat",
+            "facebookchat",
+            "facebook_chat",
+            "hangouts_chat",
+            "hangout_chat",
+            "skype_chat",
+            "facebook_audio",
+            "hangouts_audio",
+            "skype_audio",
+            "voipbuster",
+            "email",
+        ],
+    ),
+    (
+        "StreamingMedia",
+        [
+            "spotify",
+            "youtube",
+            "netflix",
+            "vimeo",
+            "facebook_video",
+            "hangouts_video",
+            "skype_video",
+        ],
+    ),
+    (
+        "FileTransfer",
+        [
+            "ftps_down",
+            "ftps_up",
+            "scpdown",
+            "scp_down",
+            "scpup",
+            "scp_up",
+            "scp",
+            "sftpdown",
+            "sftp_down",
+            "sftpup",
+            "sftp_up",
+            "sftp",
+            "skype_file",
+        ],
+    ),
+]
+
+
 def get_class_rules(scheme: str) -> list[tuple[str, list[str]]]:
-    if scheme == "7class":
-        return CLASS_RULES_7
-    if scheme == "8class":
-        return CLASS_RULES_8
+    if scheme == "tcp7class":
+        return CLASS_RULES_TCP7
+    if scheme == "tcp8class":
+        return CLASS_RULES_TCP8
+    if scheme == "tcp3class":
+        return CLASS_RULES_TCP3
+    if scheme == "tcp4class":
+        return CLASS_RULES_TCP4
     if scheme == "tcp5class":
         return CLASS_RULES_TCP5
     raise ValueError(f"Unknown class scheme: {scheme}")
 
 
-def infer_label(path: Path, class_rules: list[tuple[str, list[str]]] = CLASS_RULES_7) -> str | None:
+def infer_label(path: Path, class_rules: list[tuple[str, list[str]]] = CLASS_RULES_TCP7) -> str | None:
     name = path.stem.lower()
     for label, prefixes in class_rules:
         if any(name.startswith(prefix) for prefix in prefixes):
@@ -202,11 +309,18 @@ def infer_label(path: Path, class_rules: list[tuple[str, list[str]]] = CLASS_RUL
     return None
 
 
-def iter_nonvpn_pcaps(raw_dir: Path) -> list[Path]:
+def iter_nonvpn_pcaps(raw_dir: Path, subset: str | None = None) -> list[Path]:
     patterns = ["*.pcap", "*.pcapng"]
     out: list[Path] = []
-    for pattern in patterns:
-        out.extend(raw_dir.glob(f"NonVPN-PCAPs-*/*{pattern[1:]}"))
+    if subset:
+        dirs = [raw_dir / subset]
+    else:
+        dirs = sorted(raw_dir.glob("NonVPN-PCAPs-*"))
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for pattern in patterns:
+            out.extend(d.glob(pattern))
     return sorted(set(out))
 
 
@@ -243,16 +357,23 @@ def main() -> None:
     )
     parser.add_argument(
         "--scheme",
-        choices=["7class", "8class", "tcp5class"],
-        default="7class",
-        help=(
-            "Class mapping scheme. 8class splits Spotify/Music out of Audio. "
-            "tcp5class merges labels for TCP packet-length classification."
-        ),
+        choices=["tcp3class", "tcp4class", "tcp5class", "tcp7class", "tcp8class"],
+        default="tcp7class",
+        help="Class mapping scheme. tcp3class: Comm+Email / Media / File. "
+             "tcp4class: Comm / Email / Media+VideoCall / File. "
+             "tcp5class: Comm / Email / Media / VideoCall / File. "
+             "tcp7class: fine-grained 7 classes. "
+             "tcp8class: tcp7class + Spotify split as Music.",
     )
     parser.add_argument("--raw-dir", type=Path, default=Path("data/raw"))
-    parser.add_argument("--work-dir", type=Path, default=Path("data/processed/nonvpn_7class"))
-    parser.add_argument("--out", type=Path, default=Path("data/processed/training/flows_nonvpn_7class.csv"))
+    parser.add_argument(
+        "--subset",
+        default=None,
+        type=str,
+        help="Only use a specific NonVPN subset, e.g. NonVPN-PCAPs-01.",
+    )
+    parser.add_argument("--work-dir", type=Path, default=Path("data/processed/nonvpn_tcp7class"))
+    parser.add_argument("--out", type=Path, default=Path("data/processed/training/flows_nonvpn_tcp7class.csv"))
     parser.add_argument("--seq-len", type=int, default=SEQ_LEN)
     parser.add_argument(
         "--min-packets",
@@ -314,6 +435,12 @@ def main() -> None:
         action="store_true",
         help="Disable per-PCAP tqdm packet progress bars.",
     )
+    parser.add_argument(
+        "--max-packets",
+        type=int,
+        default=0,
+        help="Stop reading each PCAP after N packets. 0 means read everything.",
+    )
     args = parser.parse_args()
 
     if args.seq_len <= 0:
@@ -327,7 +454,7 @@ def main() -> None:
     if args.max_per_class < 0:
         raise ValueError("--max-per-class must be >= 0.")
 
-    pcaps = iter_nonvpn_pcaps(args.raw_dir)
+    pcaps = iter_nonvpn_pcaps(args.raw_dir, args.subset)
     if not pcaps:
         raise FileNotFoundError(f"No NonVPN PCAP files found under {args.raw_dir}")
 
@@ -385,6 +512,7 @@ def main() -> None:
                     max_windows_per_flow=args.max_windows_per_flow,
                     signed_lengths=args.signed_lengths,
                     show_progress=not args.no_progress,
+                    max_packets=args.max_packets,
                 )
                 rebuilt += 1
             part_csvs.append((part_csv, label))

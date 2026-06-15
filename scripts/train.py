@@ -26,7 +26,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import LABEL_PATH, MODEL_PATH, NUM_CLASSES, SEQ_LEN
+from src.config import NUM_CLASSES, SEQ_LEN, get_label_path, get_model_dir, get_model_path
 from src.model.cnn1d import CNN1DClassifier
 from src.model.lstm import LSTMClassifier
 
@@ -112,7 +112,16 @@ def main() -> None:
         type=int,
         help="Cap training samples per class before split (0 means no cap).",
     )
+    parser.add_argument(
+        "--tag",
+        default=None,
+        type=str,
+        help="Experiment tag. Artifacts saved to artifacts/<tag>/ instead of artifacts/.",
+    )
     args = parser.parse_args()
+    model_dir = get_model_dir(args.tag)
+    model_path = get_model_path(args.tag)
+    label_path = get_label_path(args.tag)
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -237,6 +246,11 @@ def main() -> None:
     best_acc = 0.0
     best_macro_f1 = 0.0
 
+    log_csv = model_dir / "training_log.csv"
+    log_csv.parent.mkdir(parents=True, exist_ok=True)
+    with log_csv.open("w", newline="") as f:
+        f.write("epoch,train_loss,val_acc,val_macro_f1,lr\n")
+
     try:
         for epoch in range(args.epochs):
             if INTERRUPTED:
@@ -321,27 +335,29 @@ def main() -> None:
                 f"Epoch {epoch + 1}/{args.epochs} - loss: {avg_loss:.4f} - "
                 f"val_acc: {acc:.4f} - val_macro_f1: {macro_f1:.4f} - lr: {current_lr:.6f}"
             )
+            with log_csv.open("a", newline="") as f:
+                f.write(f"{epoch + 1},{avg_loss:.6f},{acc:.6f},{macro_f1:.6f},{current_lr:.8f}\n")
     except KeyboardInterrupt:
         INTERRUPTED = True
         print("\n[INTERRUPT] KeyboardInterrupt captured. Stopping training now...")
 
     if INTERRUPTED:
         print("[INTERRUPT] Training interrupted. Saving best checkpoint and exiting.")
-        MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        model_dir.mkdir(parents=True, exist_ok=True)
         if best_state is not None:
-            torch.save(best_state, MODEL_PATH)
-            with LABEL_PATH.open("w", encoding="utf-8") as f:
+            torch.save(best_state, model_path)
+            with label_path.open("w", encoding="utf-8") as f:
                 json.dump(encoder.classes_.tolist(), f, ensure_ascii=True, indent=2)
-            print(f"[INTERRUPT] Saved best checkpoint to: {MODEL_PATH}")
+            print(f"[INTERRUPT] Saved best checkpoint to: {model_path}")
         return
 
-    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    model_dir.mkdir(parents=True, exist_ok=True)
     if best_state is None:
         best_state = model.state_dict()
-    torch.save(best_state, MODEL_PATH)
+    torch.save(best_state, model_path)
     model.load_state_dict(best_state)
     model.eval()
-    with LABEL_PATH.open("w", encoding="utf-8") as f:
+    with label_path.open("w", encoding="utf-8") as f:
         json.dump(encoder.classes_.tolist(), f, ensure_ascii=True, indent=2)
 
     best_pred = []
@@ -376,7 +392,7 @@ def main() -> None:
     axes[2].set_xlabel("Epoch")
 
     fig.tight_layout()
-    fig.savefig(MODEL_PATH.parent / "training_curves.png", dpi=150)
+    fig.savefig(model_dir / "training_curves.png", dpi=150)
 
     cm = confusion_matrix(best_true, best_pred, labels=list(range(num_classes)))
     cm_norm = confusion_matrix(best_true, best_pred, labels=list(range(num_classes)), normalize="true")
@@ -393,12 +409,12 @@ def main() -> None:
     plt.xlabel("Predicted")
     plt.ylabel("True")
     plt.tight_layout()
-    plt.savefig(MODEL_PATH.parent / "confusion_matrix.png", dpi=150)
+    plt.savefig(model_dir / "confusion_matrix.png", dpi=150)
 
     print(f"Best val_macro_f1: {best_macro_f1:.4f}")
     print(f"Best val_acc: {best_acc:.4f}")
-    print(f"Model saved to: {MODEL_PATH}")
-    print(f"Labels saved to: {LABEL_PATH}")
+    print(f"Model saved to: {model_path}")
+    print(f"Labels saved to: {label_path}")
 
 
 if __name__ == "__main__":

@@ -59,6 +59,7 @@ def pcap_to_csv(
     signed_lengths: bool = False,
     show_progress: bool = True,
     progress_cb: Callable[[int], None] | None = None,
+    max_packets: int = 0,
 ) -> None:
     flows = {}
     flow_forward_endpoint = {}
@@ -88,6 +89,9 @@ def pcap_to_csv(
 
         idx = 0
         for idx, pkt in enumerate(reader, start=1):
+            if max_packets > 0 and idx > max_packets:
+                print(f"Reached --max-packets={max_packets}, stopping early.")
+                break
             if IP in pkt and TCP in pkt:
                 key = flow_key(pkt, bidirectional=bidirectional)
                 pkt_len = len(pkt)
@@ -162,6 +166,7 @@ def main() -> None:
     parser.add_argument("--max-windows-per-flow", default=0, type=int)
     parser.add_argument("--signed-lengths", action="store_true")
     parser.add_argument("--drop-duplicate-features", action="store_true")
+    parser.add_argument("--max-packets", default=0, type=int, help="Stop reading after N packets (0 = unlimited).")
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument(
         "--directional",
@@ -183,6 +188,7 @@ def main() -> None:
         max_windows_per_flow=args.max_windows_per_flow,
         signed_lengths=args.signed_lengths,
         show_progress=not args.no_progress,
+        max_packets=args.max_packets,
     )
 
 
